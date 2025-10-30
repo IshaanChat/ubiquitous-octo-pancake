@@ -1,0 +1,57 @@
+#ServiceNow MCP Tool Packages Configuration - Banking Edition
+#Define sets of tools to be exposed by MCP server for ServiceNow
+#MCP server loads tools based of MCP_TOOL_PACKAGES environment variable
+
+service_desk:
+  #Incident Management:
+  - create_incident
+  - update_incident
+  - add_comment
+  - resolve_incident
+  - list_incidents
+
+  #User Lookup
+  - get_user
+  - list_users
+
+catalogue_builder:
+  #Core Catalog
+  - list_catalog_items
+  - get_catalog_item
+  - create_catalog_item
+  - update_catalog_item
+
+  #Categories
+  - list_catalog_categories
+  - create_catalog_category
+  - update_catalog_category
+
+change_coordinator:
+  #Change Lifecycle Management
+  - create_change_request
+  - update_change_request
+  - list_change_requests
+  - get_change_request_details
+
+  #Approval
+  - approve_change
+  - reject_change
+
+knowledge_author:
+  #Article Lifecycle Management
+  - create_article
+  - update_article
+  - list_articles
+  - get_article
+
+systems_administrator:
+  #System Administration
+  - create_user
+  - update_user
+  - list_users
+  - get_user
+
+  #Group Management
+  - create_group
+  - update_group
+  - list_groups
