@@ -1,4 +1,4 @@
-"""
+﻿"""
 Catalog Builder tools for ServiceNow MCP integration.
 Handles service catalog and category management.
 """
@@ -36,8 +36,11 @@ async def _maybe_await(callable_or_awaitable, *args, **kwargs):
     except Exception:
         # Propagate exceptions from the underlying call (e.g., raise_for_status)
         raise
-    if inspect.isawaitable(result):
-        return await result
+    for _ in range(2):
+        if inspect.isawaitable(result):
+            result = await result
+        else:
+            break
     return result
 
 
@@ -212,14 +215,12 @@ async def list_catalog_items(
             )
         ) as client:
             logger.debug("Sending GET request...")
-            response = await client.get(
+            response = await _maybe_await(client.get,
                 f"{config.instance_url}/api/now/v1/servicecatalog/items",
                 params=query_params,
                 headers=headers
             )
             # Some mocks may return an awaitable that yields the response
-            if inspect.isawaitable(response):
-                response = await response
             logger.debug("Got response, checking status...")
             await _maybe_await(response.raise_for_status)
             
@@ -303,13 +304,11 @@ async def get_catalog_item(
         
         # Make the API request for the item details
         async with httpx.AsyncClient(timeout=config.timeout) as client:
-            response = await client.get(
+            response = await _maybe_await(client.get,
                 f"{config.instance_url}/api/now/v1/servicecatalog/items/{params.item_id}",
                 params={"sysparm_display_value": "true"},
                 headers=headers
             )
-            if inspect.isawaitable(response):
-                response = await response
             await _maybe_await(response.raise_for_status)
             
             data = await _maybe_await(response.json)
@@ -323,12 +322,10 @@ async def get_catalog_item(
                 )
             
             # Get variables/fields for the catalog item
-            fields_response = await client.get(
+            fields_response = await _maybe_await(client.get,
                 f"{config.instance_url}/api/now/v1/servicecatalog/items/{params.item_id}/variables",
                 headers=headers
             )
-            if inspect.isawaitable(fields_response):
-                fields_response = await fields_response
             await _maybe_await(fields_response.raise_for_status)
             
             fields_data = await _maybe_await(fields_response.json)
@@ -422,13 +419,11 @@ async def create_catalog_item(
         
         # Make the API request
         async with httpx.AsyncClient(timeout=config.timeout) as client:
-            response = await client.post(
+            response = await _maybe_await(client.post,
                 f"{config.instance_url}/api/now/v1/servicecatalog/items",
                 json=payload,
                 headers=headers
             )
-            if inspect.isawaitable(response):
-                response = await response
             await _maybe_await(response.raise_for_status)
             
             data = await _maybe_await(response.json)
@@ -527,13 +522,11 @@ async def update_catalog_item(
         
         # Make the API request
         async with httpx.AsyncClient(timeout=config.timeout) as client:
-            response = await client.patch(
+            response = await _maybe_await(client.patch,
                 f"{config.instance_url}/api/now/v1/servicecatalog/items/{params.item_id}",
                 json=payload,
                 headers=headers
             )
-            if inspect.isawaitable(response):
-                response = await response
             await _maybe_await(response.raise_for_status)
             
             data = await _maybe_await(response.json)
@@ -636,13 +629,11 @@ async def list_catalog_categories(
         
         # Make the API request
         async with httpx.AsyncClient(timeout=config.timeout) as client:
-            response = await client.get(
+            response = await _maybe_await(client.get,
                 f"{config.instance_url}/api/now/v1/servicecatalog/categories",
                 params=query_params,
                 headers=headers
             )
-            if inspect.isawaitable(response):
-                response = await response
             await _maybe_await(response.raise_for_status)
             
             data = await _maybe_await(response.json)
@@ -706,13 +697,11 @@ async def create_catalog_category(
         
         # Make the API request
         async with httpx.AsyncClient(timeout=config.timeout) as client:
-            response = await client.post(
+            response = await _maybe_await(client.post,
                 f"{config.instance_url}/api/now/v1/servicecatalog/categories",
                 json=payload,
                 headers=headers
             )
-            if inspect.isawaitable(response):
-                response = await response
             await _maybe_await(response.raise_for_status)
             
             data = await _maybe_await(response.json)
@@ -809,13 +798,11 @@ async def update_catalog_category(
         
         # Make the API request
         async with httpx.AsyncClient(timeout=config.timeout) as client:
-            response = await client.patch(
+            response = await _maybe_await(client.patch,
                 f"{config.instance_url}/api/now/v1/servicecatalog/categories/{params.category_id}",
                 json=payload,
                 headers=headers
             )
-            if inspect.isawaitable(response):
-                response = await response
             await _maybe_await(response.raise_for_status)
             
             data = await _maybe_await(response.json)
@@ -876,3 +863,48 @@ async def update_catalog_category(
             message=f"Unexpected error while updating catalog category: {str(e)}",
             data=None
         )
+
+
+
+
+# Tool metadata
+TOOL_ID = "catalogue"
+TOOL_NAME = "Catalogue Builder Tools"
+TOOL_DESCRIPTION = "ServiceNow tools for service catalog and category management"
+
+OPERATIONS = {
+    "list_catalog_items": {
+        "description": "List service catalog items",
+        "required_params": [],
+        "optional_params": ["limit", "offset", "category", "query", "active"],
+    },
+    "get_catalog_item": {
+        "description": "Get catalog item details",
+        "required_params": ["item_id"],
+    },
+    "create_catalog_item": {
+        "description": "Create a new catalog item",
+        "required_params": ["name", "description"],
+        "optional_params": ["category", "template", "workflow", "active"],
+    },
+    "update_catalog_item": {
+        "description": "Update an existing catalog item",
+        "required_params": ["item_id"],
+        "optional_params": ["name", "description", "category", "active"],
+    },
+    "list_catalog_categories": {
+        "description": "List service catalog categories",
+        "required_params": [],
+        "optional_params": ["limit", "offset", "query", "active"],
+    },
+    "create_catalog_category": {
+        "description": "Create a new catalog category",
+        "required_params": ["name", "description"],
+        "optional_params": ["parent_category"],
+    },
+    "update_catalog_category": {
+        "description": "Update an existing catalog category",
+        "required_params": ["category_id"],
+        "optional_params": ["name", "description", "parent_category"],
+    },
+}

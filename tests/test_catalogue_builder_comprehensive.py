@@ -1,4 +1,4 @@
-"""Comprehensive test suite for ServiceNow catalog management functionality."""
+﻿"""Comprehensive test suite for ServiceNow catalog management functionality."""
 import logging
 import os
 import sys
@@ -411,51 +411,59 @@ async def test_network_error_handling(config, auth_manager, mock_client):
         assert response.success is False
         assert "Network error" in response.message
         assert "Connection failed" in response.message
-async def test_authentication_error_handling(config, auth_manager, mock_client):
-    """Test handling of authentication errors."""
-    mock_response = create_mock_response(status_code=401, data={"error": "Unauthorized"})
-    mock_client.get.return_value = mock_response
-    
-    with patch("httpx.AsyncClient", return_value=mock_client):
-            # Test list_catalog_items
-            try:
-                await list_catalog_items(
-                    config,
-                    auth_manager,
-                    ListCatalogItemsParams(limit=10, offset=0)
-                )
-                pytest.fail("Expected ValueError to be raised")
-            except ValueError as e:
-                assert "401" in str(e)
-            
-            # Test get_catalog_item
-            response = await get_catalog_item(
-                config,
-                auth_manager,
-                GetCatalogItemParams(item_id="test_item_001")
-            )
-            assert response.success is False
-            assert "401" in response.message@pytest.mark.asyncio
-async def test_permission_error_handling(config, auth_manager, mock_client):
-    """Test handling of permission errors."""
-    mock_response = create_mock_response(status_code=403, data={"error": "Forbidden"})
-    mock_client.get.return_value = mock_response
-    
-    with patch("httpx.AsyncClient", return_value=mock_client):
-        # Test list_catalog_items
-        with pytest.raises(ValueError) as exc_info:
-            await list_catalog_items(
-                config,
-                auth_manager,
-                ListCatalogItemsParams(limit=10, offset=0)
-            )
-        assert "Not authorized" in str(exc_info.value)
-        
-        # Test get_catalog_item
-        response = await get_catalog_item(
-            config,
-            auth_manager,
-            GetCatalogItemParams(item_id="test_item_001")
-        )
-        assert response.success is False
-        assert "Not authorized" in response.message
+async def test_authentication_error_handling(config, auth_manager, mock_client):
+    """Test handling of authentication errors."""
+    mock_response = create_mock_response(status_code=401, data={"error": "Unauthorized"})
+    mock_client.get.side_effect = [
+        mock_response,
+        create_mock_response(status_code=401, data={"error": "Unauthorized"}),
+    ]
+
+    with patch("httpx.AsyncClient", return_value=mock_client):
+        # Test list_catalog_items
+        try:
+            await list_catalog_items(
+                config,
+                auth_manager,
+                ListCatalogItemsParams(limit=10, offset=0)
+            )
+            pytest.fail("Expected ValueError to be raised")
+        except ValueError as e:
+            assert "401" in str(e)
+
+        # Test get_catalog_item
+        response = await get_catalog_item(
+            config,
+            auth_manager,
+            GetCatalogItemParams(item_id="test_item_001")
+        )
+        assert response.success is False
+        assert "401" in response.message
+
+async def test_permission_error_handling(config, auth_manager, mock_client):
+    """Test handling of permission errors."""
+    mock_response = create_mock_response(status_code=403, data={"error": "Forbidden"})
+    mock_client.get.side_effect = [
+        mock_response,
+        create_mock_response(status_code=403, data={"error": "Forbidden"}),
+    ]
+
+    with patch("httpx.AsyncClient", return_value=mock_client):
+        # Test list_catalog_items
+        with pytest.raises(ValueError) as exc_info:
+            await list_catalog_items(
+                config,
+                auth_manager,
+                ListCatalogItemsParams(limit=10, offset=0)
+            )
+        assert "Not authorized" in str(exc_info.value)
+
+        # Test get_catalog_item
+        response = await get_catalog_item(
+            config,
+            auth_manager,
+            GetCatalogItemParams(item_id="test_item_001")
+        )
+        assert response.success is False
+        assert "Not authorized" in response.message
+
