@@ -13,6 +13,7 @@ from test_utils import (
 
 from tools.service_desk import (
     list_incidents,
+    list_my_incidents,
     get_incident,
     create_incident,
     update_incident,
@@ -23,7 +24,7 @@ from tools.service_desk import (
     CreateIncidentParams,
     UpdateIncidentParams,
     AddCommentParams,
-    ResolveIncidentParams
+    ResolveIncidentParams,
 )
 
 @pytest.mark.asyncio
@@ -133,3 +134,14 @@ async def test_error_handling():
     
     assert result.success is False
     assert result.error is not None
+
+
+@pytest.mark.asyncio
+async def test_list_my_incidents_by_user_name():
+    # Build params for list_my_incidents using username
+    from tools.service_desk import ListMyIncidentsParams as _P
+    p = _P(user_name="jsmith", limit=5, offset=0, state="2")
+    client = make_mock_snow_client({"result": [{"number": "INC0010002"}]})
+    res = await list_my_incidents(mock_server_config, client, p)
+    assert res["count"] == 1
+    assert res["incidents"][0]["number"] == "INC0010002"

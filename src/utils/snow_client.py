@@ -15,6 +15,7 @@ import httpx
 
 from config import ServerConfig
 from auth.auth_manager import AuthManager
+from .http_client import get_secure_client, get_secure_headers
 
 
 logger = logging.getLogger(__name__)
@@ -35,11 +36,8 @@ class ServiceNowClient:
         self.auth_manager = auth_manager
 
     async def _client(self) -> httpx.AsyncClient:
-        return httpx.AsyncClient(
-            timeout=self.config.timeout,
-            verify=True,
-            http2=False,  # Disable HTTP/2 to avoid h2 dependency
-        )
+        # Reuse shared secure client configuration
+        return get_secure_client(self.config.timeout)
 
     async def _request(
         self,
@@ -51,7 +49,8 @@ class ServiceNowClient:
         headers: Optional[Dict[str, str]] = None,
     ) -> httpx.Response:
         auth_headers = await self.auth_manager.aget_headers()
-        all_headers = _secure_headers(auth_headers)
+        # Reuse shared secure headers configuration (adds security headers)
+        all_headers = get_secure_headers(auth_headers)
         if headers:
             all_headers.update(headers)
 

@@ -3,11 +3,13 @@ ServiceNow MCP Server entry point.
 """
 import logging
 import os
-from typing import Dict, Any
+from typing import Dict, Any, AsyncIterator, Optional
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 import uvicorn
 
 from config import (
@@ -26,25 +28,172 @@ from mcp_core.jsonrpc import (
     jsonrpc_tools_list,
 )
 from mcp_core.server import ServiceNowMCPServer
+from utils.logging import setup_logging
 
 # Load environment variables
 load_dotenv()
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+# Configure logging (env-driven)
+log_level = os.getenv("LOG_LEVEL", "INFO")
+log_file = os.getenv("LOG_FILE") or None
+log_json = (os.getenv("LOG_JSON", "false").lower() in {"1", "true", "yes"})
+setup_logging(log_level=log_level, log_file=log_file, log_json=log_json)
 logger = logging.getLogger(__name__)
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.lower() in {"1", "true", "yes", "on"}
+
+
+def _resolve_host(default: str = "0.0.0.0") -> str:
+    return (
+        os.getenv("UVICORN_HOST")
+        or os.getenv("HOST")
+        or os.getenv("APP_HOST")
+        or os.getenv("BIND_HOST")
+        or default
+    )
+
+
+def _resolve_port(default: int = 8000) -> int:
+    for key in ("UVICORN_PORT", "PORT", "APP_PORT", "BIND_PORT"):
+        value = os.getenv(key)
+        if value:
+            try:
+                return int(value)
+            except ValueError as exc:
+                raise ValueError(f"Invalid integer for {key}={value!r}") from exc
+    return default
 
 # Initialize FastAPI app
 app = FastAPI(title="ServiceNow MCP Server")
 
-# Configure CORS
+# Configure CORS (configurable via env CORS_ALLOW_ORIGINS)
+def _parse_cors_origins(env_value: Optional[str]) -> list:
+    if not env_value or env_value.strip() == "*":
+        return ["*"]
+    parts = [p.strip() for p in env_value.split(",") if p.strip()]
+    return parts or ["*"]
+
+# Determine environment (prod vs dev)
+_env = (os.getenv("APP_ENV") or os.getenv("ENVIRONMENT") or "").lower()
+_is_prod = _env in {"prod", "production"} or (os.getenv("PRODUCTION", "").lower() in {"1", "true", "yes"})
+
+cors_origins = _parse_cors_origins(os.getenv("CORS_ALLOW_ORIGINS", "*"))
+# Lock CORS in production if wildcard
+if _is_prod and cors_origins == ["*"]:
+    cors_origins = []  # No cross-origin unless explicitly configured
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+class RequestIdMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        import uuid
+        # Allow client-provided request id; otherwise generate
+        req_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
+        request.state.request_id = req_id
+        # Proceed
+        response = await call_next(request)
+        response.headers["X-Request-ID"] = req_id
+        return response
+
+
+app.add_middleware(RequestIdMiddleware)
+
+
+
+
+# --- Streaming (SSE) endpoint -------------------------------------------------
+async def _sse_event_stream(
+    request: Request,
+    interval: float = 1.0,
+    max_events: Optional[int] = None,
+) -> AsyncIterator[bytes]:
+    """Async generator that yields Server-Sent Events (SSE).
+
+    - Sends periodic tick events with a timestamp to keep the connection alive.
+    - Stops when the client disconnects or the optional max_events is reached.
+    """
+    import asyncio
+    import json
+    from datetime import datetime, timezone
+
+    count = 0
+    while True:
+        # Stop if client disconnected
+        try:
+            if await request.is_disconnected():
+                break
+        except Exception:
+            # If detection fails, proceed conservatively
+            pass
+
+        payload = {
+            "type": "tick",
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "count": count,
+        }
+        data = f"id: {count}\nevent: tick\ndata: {json.dumps(payload)}\n\n"
+        yield data.encode("utf-8")
+
+        count += 1
+        if max_events is not None and count >= max_events:
+            break
+
+        try:
+            await asyncio.sleep(max(0.05, float(interval)))
+        except Exception:
+            # If sleep fails due to cancellation, exit
+            break
+
+
+@app.get("/events")
+async def events(
+    request: Request,
+    interval: float = 1.0,
+    limit: Optional[int] = None,
+):
+    """Simple SSE endpoint for real-time, streamable HTTP.
+
+    Query params:
+    - interval: seconds between events (default 1.0)
+    - limit: optional maximum number of events to send
+    """
+    # Optional auth for events when EVENTS_AUTH_REQUIRED=true
+    # Default to requiring auth in production unless explicitly disabled
+    env_val = os.getenv("EVENTS_AUTH_REQUIRED")
+    if env_val is None:
+        auth_required = _is_prod
+    else:
+        auth_required = env_val.lower() in {"1", "true", "yes"}
+    if auth_required:
+        expected = os.getenv("EVENTS_AUTH_TOKEN") or os.getenv("RPC_AUTH_TOKEN")
+        provided = request.headers.get("Authorization") or request.query_params.get("auth")
+        if isinstance(provided, str) and provided.lower().startswith("bearer "):
+            provided = provided.split(" ", 1)[1]
+        if not expected or provided != expected:
+            raise HTTPException(status_code=401, detail="Unauthorized")
+
+    headers = {
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        # Disable buffering on some proxies
+        "X-Accel-Buffering": "no",
+    }
+    return StreamingResponse(
+        _sse_event_stream(request, interval=interval, max_events=limit),
+        media_type="text/event-stream",
+        headers=headers,
+    )
 
 def _build_server_config() -> ServerConfig:
     instance = os.getenv("SERVICENOW_INSTANCE", "")
@@ -118,7 +267,7 @@ async def handle_mcp_request(request: MCPRequest) -> MCPResponse:
 
 
 @app.post("/rpc")
-async def handle_jsonrpc(payload: Dict[str, Any]) -> Dict[str, Any]:
+async def handle_jsonrpc(payload: Dict[str, Any], request: Request) -> Dict[str, Any]:
     """JSON-RPC 2.0 endpoint exposing minimal MCP-style methods.
 
     Methods:
@@ -146,22 +295,20 @@ async def handle_jsonrpc(payload: Dict[str, Any]) -> Dict[str, Any]:
             import os
             token = os.getenv("RPC_AUTH_TOKEN")
             if token:
-                # Expect Authorization: Bearer <token>
-                # FastAPI stores headers in request context; we can access via dependency injection here
-                from fastapi import Request
-                from fastapi import Depends
-            
-            # Authentication check using the global request state via FastAPI's context is non-trivial here.
-            # Instead, read from params meta: allow passing token as 'auth' or skip if not set.
-            # Prefer header in actual runtime; for safety, also allow params["auth"] when present.
-            token = os.getenv("RPC_AUTH_TOKEN")
-            if token:
-                provided = None
-                # Allow either params.auth or params.Authorization for testing convenience
-                if isinstance(params, dict):
-                    provided = params.get("auth") or params.get("Authorization")
+                provided = request.headers.get("Authorization")
                 if isinstance(provided, str) and provided.lower().startswith("bearer "):
                     provided = provided.split(" ", 1)[1]
+                # Back-compat: allow token via params.auth/Authorization, configurable
+                # Default disabled in production
+                allow_params_env = os.getenv("RPC_ALLOW_PARAMS_AUTH")
+                if allow_params_env is None:
+                    allow_params = not _is_prod
+                else:
+                    allow_params = allow_params_env.lower() in {"1", "true", "yes"}
+                if not provided and allow_params and isinstance(params, dict):
+                    provided = params.get("auth") or params.get("Authorization")
+                    if isinstance(provided, str) and provided.lower().startswith("bearer "):
+                        provided = provided.split(" ", 1)[1]
                 if provided != token:
                     return jsonrpc_error(id_value, -32001, "Unauthorized")
             name = params.get("name")
@@ -208,4 +355,9 @@ async def health_details() -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run(
+        app,
+        host=_resolve_host(),
+        port=_resolve_port(),
+        reload=_env_flag("UVICORN_RELOAD", default=True),
+    )

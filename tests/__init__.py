@@ -4,7 +4,7 @@ This module provides common test fixtures and utilities used across test cases.
 """
 import pytest
 from fastapi.testclient import TestClient
-from tests.test_utils.debug_client import _TestDebugger as TestDebugger
+from tests.test_utils.debug_client import DebugClientHelper as TestDebugger
 
 # Re-export commonly used test utilities
 __all__ = ['TestDebugger', 'TestClient']

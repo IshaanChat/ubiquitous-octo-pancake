@@ -21,6 +21,7 @@ from tools import (
     change_coordinator,
     knowledge_author,
     systems_administrator,
+    cmdb_reader,
 )
 
 logger = logging.getLogger(__name__)
@@ -52,7 +53,8 @@ class ServiceNowMCPServer:
             "catalogue": catalogue_builder,
             "change": change_coordinator,
             "knowledge": knowledge_author,
-            "system": systems_administrator
+            "system": systems_administrator,
+            "cmdb": cmdb_reader,
         }
 
         # Load tool metadata

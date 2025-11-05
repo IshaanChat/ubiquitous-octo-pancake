@@ -55,8 +55,10 @@ scripts/setup.ps1
 - `POST /rpc` — JSON‑RPC 2.0 methods: `initialize`, `tools/list`, `tools/call`
 - `GET /tools` — Lists available tools from the server runtime
 - `GET /health` — Health and ServiceNow connectivity check
+- `GET /events` — Server-Sent Events (SSE) stream for real-time, streamable HTTP
 
 If `RPC_AUTH_TOKEN` is set, `/rpc` requires `Bearer <token>` (via JSON params `auth` or `Authorization`).
+For production, prefer the standard HTTP `Authorization: Bearer <token>` header.
 
 ## MCP Protocol
 - Request model: `src/mcp_core/protocol.py: MCPRequest(version, type="request", id, tool, parameters)`
@@ -93,6 +95,18 @@ The server builds `ServerConfig` from env in `src/main.py` and passes it to the 
 - Token refresh on 401/403 (delegated to `AuthManager`)
 - Simple rate limiter (requests/minute)
 
+### Streamable HTTP
+- Server-side SSE: see `src/main.py:events` which returns `text/event-stream` and emits periodic events.
+- Client-side streaming: use `src/utils/http_client.py:stream_request` to iterate bytes (or lines via `as_lines=True`) without buffering entire bodies.
+
+Example client usage:
+```python
+from utils.http_client import stream_request
+
+async for chunk in stream_request("GET", "http://localhost:8000/events", config, auth_manager):
+    print(chunk.decode().rstrip())
+```
+
 ## Tools Overview
 Each tool module exposes operations with Pydantic parameter models and metadata:
 - `src/tools/service_desk.py` — Incidents and user lookups
@@ -107,6 +121,8 @@ Each tool module exposes operations with Pydantic parameter models and metadata:
   - list/get/create/update articles
 - `src/tools/systems_administrator.py` — Users and groups
   - list/get/create/update users and groups
+ - `src/tools/cmdb_reader.py` — CMDB read-only access
+   - list/get configuration items; list relationships
 
 Tool names are `<module>.<operation>` (e.g., `service_desk.list_incidents`, `catalogue.get_catalog_item`). Use `/rpc` `tools/list` to see schemas.
 
@@ -118,6 +134,18 @@ Environment variables read at startup (`.env` supported via dotenv):
 - `OAUTH_CLIENT_ID`, `OAUTH_CLIENT_SECRET`, `OAUTH_TOKEN_URL` — OAuth settings
 - `API_KEY`, `API_KEY_HEADER` — API key settings
 - `RPC_AUTH_TOKEN` — enables bearer token check for `/rpc`
+- `RPC_ALLOW_PARAMS_AUTH` — when truthy (default), allows token in JSON params for back-compat
+- `CORS_ALLOW_ORIGINS` — comma-separated list of allowed origins (default `*`)
+- `EVENTS_AUTH_REQUIRED` — when truthy (`true/1/yes`), `/events` requires bearer auth
+- `EVENTS_AUTH_TOKEN` — optional token for `/events` (falls back to `RPC_AUTH_TOKEN`)
+- `LOG_LEVEL` — `DEBUG|INFO|WARNING|ERROR|CRITICAL` (default `INFO`)
+- `LOG_JSON` — when truthy, logs in JSON lines format
+- `LOG_FILE` — optional log file path (rotating)
+- `APP_ENV`/`ENVIRONMENT`/`PRODUCTION` — when set to production, defaults change:
+  - CORS wildcard is disabled unless explicitly allowed
+  - `/events` requires auth by default
+  - `RPC_ALLOW_PARAMS_AUTH` defaults to false (header-only auth)
+
 
 Additional runtime behavior (in code): timeouts, limited connection pooling, and headers hardened per call.
 
@@ -130,7 +158,6 @@ Note on `config/tool_packages.yaml`: this file documents a curated grouping of o
   - `src/mcp_core/` — protocol models, JSON‑RPC helpers, server router
   - `src/tools/` — tool implementations and operation metadata
   - `src/utils/` — HTTP client, logging, error utilities
-  - `src/middleware/`, `src/routes/` — additional/legacy REST components
   - `scripts/setup.ps1` — Windows bootstrap
 
 ## Testing
@@ -154,3 +181,20 @@ cp .env.example .env  # edit with real values
 uvicorn src.main:app --reload
 ```
 
+## Docker
+- Build image:
+```bash
+docker build -t mcp-server .
+```
+- Run container (loads env from your local `.env`):
+```bash
+docker run --rm -p 8000:8000 --env-file .env mcp-server
+```
+- Test streamable HTTP (SSE):
+```bash
+curl -N "http://localhost:8000/events?interval=0.5&limit=5"
+```
+
+Notes:
+- See `Dockerfile:1` for the base image and runtime command.
+- `.dockerignore:1` is included to keep images small (excludes venvs, caches, tests, and local files).

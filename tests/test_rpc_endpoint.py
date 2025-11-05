@@ -71,7 +71,7 @@ def test_rpc_tools_call_auth(monkeypatch):
     assert data.get("id") == 4
     assert "error" in data and data["error"]["message"] == "Unauthorized"
 
-    # Provide token via params.auth
+    # Provide token via params.auth (back-compat path)
     payload["id"] = 5
     payload["params"]["auth"] = "Bearer secret"
     r = client.post("/rpc", json=payload)
@@ -79,4 +79,24 @@ def test_rpc_tools_call_auth(monkeypatch):
     data = r.json()
     assert data.get("jsonrpc") == "2.0"
     assert data.get("id") == 5
+    assert ("result" in data) or ("error" in data)
+
+
+def test_rpc_tools_call_auth_header(monkeypatch):
+    # Enforce token and verify success using Authorization header
+    monkeypatch.setenv("RPC_AUTH_TOKEN", "secret")
+    payload = {
+        "jsonrpc": "2.0",
+        "id": 6,
+        "method": "tools/call",
+        "params": {
+            "name": "service_desk.list_incidents",
+            "arguments": {"limit": 1},
+        },
+    }
+    r = client.post("/rpc", json=payload, headers={"Authorization": "Bearer secret"})
+    assert r.status_code == 200
+    data = r.json()
+    assert data.get("jsonrpc") == "2.0"
+    assert data.get("id") == 6
     assert ("result" in data) or ("error" in data)

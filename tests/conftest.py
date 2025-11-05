@@ -7,7 +7,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from unittest.mock import Mock
-from tests.test_utils.debug_client import _TestDebugger as TestDebugger
+from tests.test_utils.debug_client import DebugClientHelper as TestDebugger
 # Add src and tests directories to Python path
 src_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src"))
 tests_dir = os.path.abspath(os.path.dirname(__file__))

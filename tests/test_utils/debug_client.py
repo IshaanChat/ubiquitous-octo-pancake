@@ -18,7 +18,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-class _TestDebugger:
+class DebugClientHelper:
     """Helper class for debugging test requests and responses. Internal implementation."""
     
     def __init__(self, app: FastAPI, base_url: str = "http://testserver"):
@@ -99,6 +99,6 @@ class _TestDebugger:
             logger.info(f"Raw body: {self.last_response.content}")
 
 @pytest.fixture
-def debug_client(app: FastAPI) -> _TestDebugger:
+def debug_client(app: FastAPI) -> DebugClientHelper:
     """Create a test client with debugging capabilities."""
-    return _TestDebugger(app)
+    return DebugClientHelper(app)

@@ -2,7 +2,7 @@
 import asyncio
 import logging
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, AsyncIterator
 from datetime import datetime, timedelta
 
 import httpx
@@ -86,6 +86,25 @@ def get_secure_client(timeout: int) -> httpx.AsyncClient:
         f"keepalive_expiry={limits.keepalive_expiry}s"
     )
     
+    # Local sanitizer to avoid logging sensitive header values
+    def _sanitize_headers(h: Dict[str, str]) -> Dict[str, str]:
+        redacted = {}
+        sensitive = {
+            "authorization",
+            "proxy-authorization",
+            "x-api-key",
+            "x-servicenow-api-key",
+            "cookie",
+            "set-cookie",
+        }
+        for k, v in h.items():
+            kl = str(k).lower()
+            if kl in sensitive or (kl.startswith("x-") and ("key" in kl or "token" in kl)):
+                redacted[k] = "***REDACTED***"
+            else:
+                redacted[k] = v
+        return redacted
+
     return httpx.AsyncClient(
         timeout=timeout,
         verify=True,  # Enforce SSL verification
@@ -96,13 +115,13 @@ def get_secure_client(timeout: int) -> httpx.AsyncClient:
             'request': [
                 lambda r: client_logger.debug(
                     f"Starting request: {r.method} {r.url} - "
-                    f"Headers: {dict(r.headers)}"
+                    f"Headers: {_sanitize_headers(dict(r.headers))}"
                 )
             ],
             'response': [
                 lambda r: client_logger.debug(
                     f"Received response: {r.status_code} - "
-                    f"Headers: {dict(r.headers)}"
+                    f"Headers: {_sanitize_headers(dict(r.headers))}"
                 )
             ]
         }
@@ -299,3 +318,67 @@ async def make_request(
     if last_error:
         raise last_error
     raise RuntimeError("Max retries exceeded")
+
+
+async def stream_request(
+    method: str,
+    url: str,
+    config: ServerConfig,
+    auth_manager: AuthManager,
+    params: Optional[Dict[str, Any]] = None,
+    json_data: Optional[Dict[str, Any]] = None,
+    as_lines: bool = False,
+) -> AsyncIterator[bytes]:
+    """Stream an HTTP response incrementally using httpx.
+
+    This helper establishes the request and then yields incoming data chunks
+    (or decoded text lines when ``as_lines=True``) without buffering the
+    entire response body in memory.
+
+    Note: Authentication headers are obtained via ``auth_manager.aget_headers()``.
+
+    Args:
+        method: HTTP method
+        url: Request URL
+        config: Server configuration (timeout, rate limit)
+        auth_manager: Authentication manager
+        params: Optional query parameters
+        json_data: Optional JSON request body
+        as_lines: If True, yields ``bytes`` for each newline-delimited line
+
+    Yields:
+        Response chunks (bytes), or newline-delimited lines when ``as_lines``
+        is True.
+    """
+    headers = get_secure_headers(await auth_manager.aget_headers())
+    logger.info(f"Starting streaming {method} request to {url}")
+
+    rate_limiter = RateLimiter(requests_per_minute=config.rate_limit or 100)
+    await rate_limiter.acquire()
+
+    async with get_secure_client(config.timeout) as client:
+        async with client.stream(
+            method=method,
+            url=url,
+            params=params,
+            json=json_data,
+            headers=headers,
+        ) as response:
+            # Raise if not 2xx before streaming
+            response.raise_for_status()
+            logger.debug(
+                f"Streaming response headers: status={response.status_code}, "
+                f"headers={dict(response.headers)}"
+            )
+
+            if as_lines:
+                async for line in response.aiter_lines():
+                    # Normalize to bytes for consistency
+                    if line is None:
+                        continue
+                    yield (line + "\n").encode("utf-8")
+            else:
+                async for chunk in response.aiter_bytes():
+                    if not chunk:
+                        continue
+                    yield chunk

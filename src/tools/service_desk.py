@@ -112,6 +112,16 @@ class ResolveIncidentParams(BaseModel):
     resolution_notes: str = Field(..., description="Resolution notes")
 
 
+class ListMyIncidentsParams(BaseModel):
+    """Parameters for listing incidents for a specific user."""
+
+    user_id: Optional[str] = Field(None, description="Caller user sys_id")
+    user_name: Optional[str] = Field(None, description="Caller username")
+    limit: int = Field(10, description="Maximum number of incidents to return")
+    offset: int = Field(0, description="Offset for pagination")
+    state: Optional[str] = Field(None, description="Filter by incident state")
+
+
 class ListUsersParams(BaseModel):
     """Parameters for listing users."""
     
@@ -442,6 +452,47 @@ async def resolve_incident(
         return ServiceDeskResponse(success=False, message=str(e), data=None, error={"message": str(e)})
 
 
+async def list_my_incidents(
+    config: ServerConfig,
+    auth_manager: Any,
+    params: ListMyIncidentsParams,
+) -> Dict[str, Any]:
+    """List incidents for a specific caller (user).
+
+    Accepts either user_id (sys_id) or user_name. If both are absent,
+    returns an empty list to avoid unintentionally returning all incidents.
+    """
+    logger.info("Listing incidents for user")
+    client = auth_manager
+    # Build sysparm_query
+    query_parts = []
+    if params.state:
+        query_parts.append(f"state={params.state}")
+    if params.user_id:
+        query_parts.append(f"caller_id={params.user_id}")
+    elif params.user_name:
+        query_parts.append(f"caller_id.user_name={params.user_name}")
+    else:
+        # No user filter -> return no results (safety)
+        return {"incidents": [], "count": 0}
+
+    query_params = {
+        "sysparm_limit": params.limit,
+        "sysparm_offset": params.offset,
+        "sysparm_query": "^".join(query_parts),
+    }
+    try:
+        response = await client.get(f"{getattr(config, 'api_url', '')}/table/incident", params=query_params)
+        data = await _maybe_await(response.json)
+        incidents = data.get("incidents", data.get("result", []))
+        items = []
+        for inc in incidents:
+            items.append(_unwrap(inc))
+        return {"incidents": items, "count": len(items)}
+    except Exception:
+        raise
+
+
 async def list_users(
     config: ServerConfig,
     auth_manager: Any,
@@ -533,6 +584,11 @@ OPERATIONS = {
     "resolve_incident": {
         "description": "Resolve an incident",
         "required_params": ["incident_number", "resolution_notes"]
+    },
+    "list_my_incidents": {
+        "description": "List incidents for a specific user (caller)",
+        "required_params": [],
+        "optional_params": ["user_id", "user_name", "limit", "offset", "state"]
     },
     "list_users": {
         "description": "List users matching query parameters",

@@ -3,14 +3,32 @@ import logging
 import logging.handlers
 import os
 import sys
+import json
+from datetime import datetime
 from typing import Optional
+
+class JsonFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        payload = {
+            "time": datetime.utcfromtimestamp(record.created).isoformat() + "Z",
+            "level": record.levelname,
+            "name": record.name,
+            "lineno": record.lineno,
+            "message": record.getMessage(),
+        }
+        # Include extras when present
+        if record.exc_info:
+            payload["exc_info"] = self.formatException(record.exc_info)
+        return json.dumps(payload, ensure_ascii=False)
+
 
 def setup_logging(
     log_level: str = "INFO",
     log_file: Optional[str] = None,
     log_format: Optional[str] = None,
     max_bytes: int = 10_485_760,  # 10MB
-    backup_count: int = 5
+    backup_count: int = 5,
+    log_json: bool = False,
 ) -> None:
     """Configure logging for the application.
     
@@ -28,8 +46,11 @@ def setup_logging(
             "%(message)s - {%(pathname)s}"
         )
     
-    # Create formatter
-    formatter = logging.Formatter(log_format)
+    # Create formatter (optionally JSON)
+    if log_json:
+        formatter = JsonFormatter()
+    else:
+        formatter = logging.Formatter(log_format)
     
     # Configure root logger
     root_logger = logging.getLogger()
